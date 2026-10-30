@@ -1,0 +1,10 @@
+name = "uniagent-relay"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Secrets (set with `wrangler secret put NAME`): WEBHOOK_SECRET, NOTION_TOKEN, GITHUB_TOKEN
+[vars]
+OWNER_CHAT_ID = ""       # your numeric Telegram chat id
+NOTION_INBOX_DS = ""     # from: python -m uniagent.relay_setup inbox-id
+GITHUB_REPO = ""         # "owner/name"
+GITHUB_EVENT = "wake"

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+config.toml.local
+.pytest_cache/
+.venv/
+# your REAL timetable (private): imported into Notion once, never committed
+seed/timetable.toml

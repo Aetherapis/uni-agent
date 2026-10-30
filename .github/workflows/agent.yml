@@ -1,0 +1,65 @@
+name: agent
+
+# Runs the agent once per trigger. Public repos get unlimited Actions minutes; in a PRIVATE repo
+# change the schedule to every 15-30 minutes (the free quota is ~3,000 minutes per month).
+on:
+  schedule:
+    # Roughly 06:00-01:00 Cairo time (valid in both UTC+2 and UTC+3): every 5 minutes. Night: hourly.
+    # GitHub's minimum interval is 5 minutes and runs can start late when GitHub is busy.
+    - cron: "*/5 3-22 * * *"
+    - cron: "0 23,0-2 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "What to run"
+        type: choice
+        default: normal
+        options: [normal, sync-only, force-sync, skip-habitica, doctor, doctor-with-ai]
+      debug:
+        description: "Print full tracebacks (only in a private repo)"
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [wake]            # lets an external webhook trigger an immediate run
+
+# One run at a time. A newer trigger waits for the current run instead of cancelling it,
+# so a half-finished Habitica sync is never cut off.
+concurrency:
+  group: uniagent-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run the agent
+        shell: bash
+        env:
+          PYTHONPATH: src
+          MODE: ${{ inputs.mode || 'normal' }}
+          UNIAGENT_DEBUG: ${{ inputs.debug && '1' || '' }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_PARENT_PAGE: ${{ secrets.NOTION_PARENT_PAGE }}
+          HABITICA_USER_ID: ${{ secrets.HABITICA_USER_ID }}
+          HABITICA_API_KEY: ${{ secrets.HABITICA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          case "$MODE" in
+            normal)          python -m uniagent.runner | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            sync-only)       python -m uniagent.runner --sync-only | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            force-sync)      python -m uniagent.runner --force-sync | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            skip-habitica)   python -m uniagent.runner --skip-habitica | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            doctor)          python -m uniagent.doctor --ping | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            doctor-with-ai)  python -m uniagent.doctor --ping --ai --audio | tee -a "$GITHUB_STEP_SUMMARY" ;;
+          esac

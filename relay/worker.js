@@ -1,0 +1,106 @@
+// Instant-reply relay (Cloudflare Workers, free plan).
+//
+//   Telegram --webhook--> this Worker --> Notion Inbox (Pending)  +  GitHub "wake" event --> agent run
+//
+// The message is stored durably in Notion BEFORE anything else, so a missed or cancelled GitHub run
+// loses nothing: the scheduled runs pick up every Pending row anyway. If Notion fails the Worker
+// answers 500, and Telegram retries the delivery. It never logs message text.
+//
+// Secrets:  WEBHOOK_SECRET, NOTION_TOKEN, GITHUB_TOKEN (fine-grained, this repo only, Contents: read & write)
+// Vars:     OWNER_CHAT_ID, NOTION_INBOX_DS, GITHUB_REPO ("owner/name"), GITHUB_EVENT (default "wake")
+
+const NOTION_VERSION = "2026-03-11";
+const VOICE_PLACEHOLDER = "(voice note)";          // must match uniagent.notion_store.VOICE_PLACEHOLDER
+const REQUIRED = ["WEBHOOK_SECRET", "NOTION_TOKEN", "GITHUB_TOKEN", "OWNER_CHAT_ID", "NOTION_INBOX_DS", "GITHUB_REPO"];
+
+const reply = (status, body = "") => new Response(body, { status });
+
+/** Telegram update -> what the agent's Inbox needs, or null if it is not a private text/voice message. */
+export function parseUpdate(update) {
+  const msg = update && update.message;
+  if (!msg || !Number.isInteger(update.update_id)) return null;
+  const chat = msg.chat || {};
+  if (chat.type !== "private" || !Number.isInteger(chat.id)) return null;
+  const base = { updateId: update.update_id, chatId: chat.id, messageId: msg.message_id || 0,
+                 sentAt: Number.isInteger(msg.date) ? new Date(msg.date * 1000).toISOString() : new Date().toISOString() };
+  const voice = msg.voice || msg.audio;
+  if (voice && voice.file_id) {
+    return { ...base, source: "voice", fileId: String(voice.file_id), text: String(msg.caption || "").trim() };
+  }
+  if (typeof msg.text === "string" && msg.text.trim()) {
+    return { ...base, source: "text", fileId: "", text: msg.text.trim() };
+  }
+  return null;
+}
+
+const rich = (value) => (value ? [{ text: { content: String(value).slice(0, 2000) } }] : []);
+
+/** The exact Notion properties the Python side writes in NotionStore.inbox_add. */
+export function inboxProperties(m) {
+  return {
+    "Text": { title: [{ text: { content: (m.text || VOICE_PLACEHOLDER).slice(0, 2000) } }] },
+    "Source": { select: { name: m.source } },
+    "Status": { select: { name: "Pending" } },
+    "Update id": { number: m.updateId },
+    "Chat id": { number: m.chatId },
+    "Message id": { number: m.messageId },
+    "File id": { rich_text: rich(m.fileId) },
+    "Received": { date: { start: m.sentAt } },
+  };
+}
+
+async function notion(env, fetchImpl, path, body) {
+  const res = await fetchImpl(`https://api.notion.com/v1${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.NOTION_TOKEN}`, "Notion-Version": NOTION_VERSION, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`notion ${res.status}`);
+  return res.json();
+}
+
+async function wake(env, fetchImpl) {
+  const res = await fetchImpl(`https://api.github.com/repos/${env.GITHUB_REPO}/dispatches`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "uniagent-relay", "Content-Type": "application/json" },
+    body: JSON.stringify({ event_type: env.GITHUB_EVENT || "wake" }),
+  });
+  if (res.status !== 204) throw new Error(`github ${res.status}`);
+}
+
+export async function handle(request, env, fetchImpl = fetch) {
+  if (request.method !== "POST") return reply(200, "ok");
+  if (REQUIRED.some((name) => !env[name])) {
+    console.log(JSON.stringify({ event: "misconfigured" }));
+    return reply(500, "relay is not configured");
+  }
+  if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) return reply(403, "forbidden");
+
+  let update;
+  try { update = await request.json(); } catch { return reply(400, "bad request"); }
+  const m = parseUpdate(update);
+  if (!m || String(m.chatId) !== String(env.OWNER_CHAT_ID)) return reply(200, "ignored");     // strangers: silently ignored
+
+  try {
+    const existing = await notion(env, fetchImpl, `/data_sources/${env.NOTION_INBOX_DS}/query`, {
+      filter: { property: "Update id", number: { equals: m.updateId } }, page_size: 1 });
+    if (!(existing.results || []).length) {
+      await notion(env, fetchImpl, "/pages", {
+        parent: { type: "data_source_id", data_source_id: env.NOTION_INBOX_DS }, properties: inboxProperties(m) });
+    }
+  } catch (err) {
+    console.log(JSON.stringify({ event: "store_failed", error: String(err.message) }));
+    return reply(500, "store failed");                         // Telegram will retry the delivery
+  }
+
+  try {
+    await wake(env, fetchImpl);
+  } catch (err) {
+    console.log(JSON.stringify({ event: "wake_failed", error: String(err.message) }));   // safe: the schedule still runs
+  }
+  console.log(JSON.stringify({ event: "stored", updateId: m.updateId, source: m.source }));
+  return reply(200, "ok");
+}
+
+export default { fetch: (request, env) => handle(request, env) };

@@ -1,0 +1,58 @@
+# YOUR settings (Egypt). Preferences only - never put passwords here.
+timezone = "Africa/Cairo"
+
+[day]
+start = "08:00"
+end = "22:00"                    # nothing is planned after this
+rest_evenings = ["fri"]          # Friday evenings stay free
+rest_evening_start = "18:00"
+daily_preferred_time = "20:30"   # where recurring dailies go when you don't give a time
+
+[limits]
+max_task_minutes_per_day = 150   # study/task time on a class day (classes are 6 h, so this is already a lot)
+max_total_minutes_per_day = 600
+weekday_task_caps = { mon = 240, thu = 240, fri = 150 }   # your free days can take more
+away_load_factor = 0.35          # while you're on vacation only ~35% of the normal daily cap is used
+overload_factor = 1.25
+max_bulk_changes = 5            # refuse to cancel/complete more than this many tasks in one message
+
+[pacing]
+buffer_min = 10
+min_lead_min = 15
+slot_step_min = 5
+max_chunk_min = 90               # long tasks are split into sessions of at most 90 min
+min_chunk_min = 25
+rolling_window_min = 240         # burnout guard: in any 4-hour stretch...
+max_rolling_task_min = 150       # ...at most 2.5 hours of tasks (so long free days still get real breaks)
+
+[planning]
+horizon_days = 21
+deadline_buffer_days = 1
+daily_lookahead_days = 14
+
+[commute]
+arrive_before_class_min = 10
+leave_after_class_min = 10
+trip_pad_before_min = 10
+trip_pad_after_min = 10
+
+[habitica]
+horizon_days = 7
+include_classes = false
+class_lookahead_days = 1
+call_delay_seconds = 30          # Habitica requires >= 30 s between calls from background scripts
+run_budget_minutes = 25          # stop syncing after this long; the next run picks up the rest
+max_deletes_per_run = 15         # safety stop against accidental mass deletion
+
+[gemini]
+# Free-tier quotas are per model, so if one is used up the next is tried. Secrets (the API key) are NOT here.
+models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"]
+max_batch = 10                   # messages interpreted in one Gemini call
+
+[digest]
+# Messages the bot sends by itself. Use "" to switch one off.
+morning = ""                     # e.g. "07:30": today's plan
+evening = "21:00"                # tomorrow's plan (first bus, classes, tasks, deadlines)
+weekly_day = "fri"               # weekly review: what got done, how next week looks
+weekly_time = "10:00"
+

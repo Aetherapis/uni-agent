@@ -1,0 +1,58 @@
+# Copy this file to config.toml and edit it. These are PREFERENCES only -
+# never put passwords or API keys in here.
+
+timezone = "UTC"                 # your IANA timezone, e.g. "Africa/Cairo", "Europe/London"
+
+[day]
+start = "08:00"                  # earliest time a flexible task may start
+end = "21:30"                    # flexible tasks never end after this
+rest_evenings = ["fri"]          # these weekdays stay task-free after rest_evening_start
+rest_evening_start = "18:00"
+rest_days = []                   # weekdays with no flexible tasks at all, e.g. ["sat"]
+
+[limits]                         # burnout protection
+max_task_minutes_per_day = 180   # study/task time per day (classes not counted)
+max_total_minutes_per_day = 600  # classes + tasks together
+overload_factor = 1.25
+max_bulk_changes = 5            # refuse to cancel/complete more than this many tasks in one message           # last resort only, when a deadline is otherwise impossible
+# weekday_task_caps = { sat = 120, sun = 120 }   # optional per-day overrides
+
+[pacing]
+buffer_min = 10                  # breathing room around every class/task
+min_lead_min = 15                # never schedule sooner than "now + this"
+slot_step_min = 5
+max_chunk_min = 120              # longer tasks are split into sessions of at most this
+min_chunk_min = 25
+rolling_window_min = 240         # burnout guard: in any 4-hour stretch...
+max_rolling_task_min = 150       # ...at most 2.5 hours of tasks (so long free days still get real breaks)
+
+[planning]
+horizon_days = 21                # how far ahead to look for free time
+deadline_buffer_days = 1         # try to finish this many days before a deadline
+
+[commute]
+arrive_before_class_min = 10     # be on campus this long before the first class
+leave_after_class_min = 10       # earliest you'd leave after the last class
+trip_pad_before_min = 10         # walk to the stop / get ready
+trip_pad_after_min = 10          # walk from the stop
+
+[habitica]
+horizon_days = 7                 # only push the next N days of tasks to Habitica
+include_classes = false          # also list lectures as to-dos (so "what's next" has everything)
+class_lookahead_days = 1
+call_delay_seconds = 30          # Habitica requires >= 30 s between calls from background scripts
+run_budget_minutes = 25          # stop syncing after this long; the next run picks up the rest
+max_deletes_per_run = 15         # safety stop against accidental mass deletion
+
+[gemini]
+# Free-tier quotas are per model, so if one is used up the next is tried. Secrets (the API key) are NOT here.
+models = ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-latest"]
+max_batch = 10                   # messages interpreted in one Gemini call
+
+[digest]
+# Messages the bot sends by itself. Use "" to switch one off.
+morning = ""                     # e.g. "07:30": today's plan
+evening = "21:00"                # tomorrow's plan (first bus, classes, tasks, deadlines)
+weekly_day = "fri"               # weekly review: what got done, how next week looks
+weekly_time = "10:00"
+

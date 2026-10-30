@@ -1,0 +1,202 @@
+# EXAMPLE timetable with fictional room numbers, groups and course codes, but the same weekly shape as the
+# real one (Sat/Sun/Tue/Wed classes, biweekly Sunday lecture, dorm buses). The tests run on this file.
+# Your REAL timetable lives in seed/timetable.toml (git-ignored) and is imported into Notion once.
+
+# Bus ride time in minutes (ASSUMED - see the bus section at the bottom). Must stay above all [tables].
+ride_min = 60
+
+# A "slot"/"period" is a fixed time block, so sessions below just say which period they're in.
+[periods]
+1 = ["08:30", "10:00"]
+2 = ["10:15", "11:45"]
+3 = ["12:00", "13:30"]
+4 = ["13:45", "15:15"]
+5 = ["15:45", "17:15"]
+6 = ["17:45", "19:15"]
+7 = ["19:45", "21:15"]
+
+# ---------------------------------------------------------------- Saturday
+[[sessions]]
+day = "sat"
+period = 2
+course = "English for Academic Purposes"
+code = "ENG101"
+kind = "Tutorial"
+group = "Tut 1"
+location = "Room 1"
+
+[[sessions]]
+day = "sat"
+period = 3
+course = "Programming I"
+code = "CS104"
+kind = "Tutorial"
+group = "Tut 2"
+location = "Room 2"
+
+[[sessions]]
+day = "sat"
+period = 4
+course = "German 1"
+code = "GER101"
+kind = "Tutorial"
+group = "Tut 3"
+location = "Room 3"
+
+[[sessions]]
+day = "sat"
+period = 5
+course = "Mathematics I"
+code = "MATH109"
+kind = "Tutorial"
+group = "Tut 2"
+location = "Room 4"
+
+# ---------------------------------------------------------------- Sunday
+[[sessions]]
+day = "sun"
+period = 1
+course = "German 1"
+code = "GER101"
+kind = "Tutorial"
+group = "Tut 3"
+location = "Room 5"
+
+[[sessions]]
+day = "sun"
+period = 2
+course = "Digital Logic Design"
+code = "CS103"
+kind = "Tutorial"
+group = "Tut 2"
+location = "Room 6"
+
+[[sessions]]
+day = "sun"
+period = 3
+course = "Mathematics I"
+code = "MATH109"
+kind = "Lecture"
+group = "Group A"
+location = "Room 7"
+
+[[sessions]]
+day = "sun"
+period = 4
+course = "Physics"
+code = "PHYS101"
+kind = "Lecture"
+group = "Group A"
+location = "Room 8"
+every_weeks = 2                  # biweekly: you attended Sun 25 Oct, so no lecture on 1 Nov, yes on 8 Nov...
+anchor = "2026-10-25"            # any date it DID/WILL happen (not 1 Nov!)
+
+# ---------------------------------------------------------------- Tuesday
+[[sessions]]
+day = "tue"
+period = 2
+course = "Mathematics I"
+code = "MATH109"
+kind = "Lecture"
+group = "Group A"
+location = "Room 9"
+
+[[sessions]]
+day = "tue"
+period = 3
+course = "Programming I"
+code = "CS104"
+kind = "Lab"
+group = "Lab 2"
+location = "Room 10"
+
+[[sessions]]
+day = "tue"
+period = 4
+course = "Programming I"
+code = "CS104"
+kind = "Lecture"
+group = "Group A"
+location = "Room 11"
+
+[[sessions]]
+day = "tue"
+period = 5
+course = "Mathematics I"
+code = "MATH109"
+kind = "Tutorial"
+group = "Tut 2"
+location = "Room 2"
+
+# ---------------------------------------------------------------- Wednesday
+[[sessions]]
+day = "wed"
+period = 1
+course = "Digital Logic Design"
+code = "CS103"
+kind = "Lecture"
+group = "Group A"
+location = "Room 11"
+
+[[sessions]]
+day = "wed"
+period = 2
+course = "English for Academic Purposes"
+code = "ENG101"
+kind = "Tutorial"
+group = "Tut 1"
+location = "Room 12"
+
+[[sessions]]
+day = "wed"
+period = 3
+course = "Physics"
+code = "PHYS101"
+kind = "Tutorial"
+group = "Tut 2"
+location = "Room 13"
+
+[[sessions]]
+day = "wed"
+period = 4
+course = "Physics"
+code = "PHYS101"
+kind = "Lecture"
+group = "Group A"
+location = "Room 11"
+
+# One-off cancellations (a lecture that is off just this once) look like this:
+# [[cancelled]]
+# date = "2026-11-08"
+# course = "Physics"
+
+# ---------------------------------------------------------------- Dorm buses
+# Dorm shuttle. Confirmed by you:
+#   campus -> dorms: leaves campus 15:30 and 17:30, reaches the dorms 16:30 and 18:30  (60 min ride)
+#   dorms -> campus: leaves the dorms 06:40 and 08:40. The arrival time on campus is ASSUMED to be
+#   the same 60 min (07:40 / 09:40). If the morning ride is longer, change `ride_min` at the top.
+[[buses]]
+route = "Dorms bus"
+direction = "to_campus"
+depart = "06:40"                 # arrives 07:40 (assumed)
+days = ["sat", "sun", "tue", "wed"]
+
+[[buses]]
+route = "Dorms bus"
+direction = "to_campus"
+depart = "08:40"                 # arrives 09:40 (assumed)
+days = ["sat", "sun", "tue", "wed"]
+
+[[buses]]
+route = "Dorms bus"
+direction = "to_home"
+depart = "15:30"                 # confirmed
+arrive = "16:30"                 # confirmed
+days = ["sat", "sun", "tue", "wed"]
+
+[[buses]]
+route = "Dorms bus"
+direction = "to_home"
+depart = "17:30"                 # confirmed
+arrive = "18:30"                 # confirmed
+days = ["sat", "sun", "tue", "wed"]

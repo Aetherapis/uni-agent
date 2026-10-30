@@ -1,0 +1,77 @@
+# Sample tasks to try the engine against a timetable (seed/timetable.toml, or the example one).
+
+# Vacation: "I'm leaving Wednesday after uni and back late Friday" -> far fewer tasks in that window.
+[[away]]
+label = "Trip home"
+from_day = "2026-10-28"
+after_classes = true            # starts when Wednesday's last class ends
+until = "2026-10-30 22:00"
+load = "light"                  # light | half | none | a number 0-1
+
+# ---- one-time tasks (Habitica To-Do)
+[[tasks]]
+id = "labreport"
+title = "Physics lab report"
+minutes = 300
+deadline = "2026-11-03 17:00"
+priority = "high"
+
+[[tasks]]
+id = "ch3"
+title = "Read calculus chapter 3"
+minutes = 60
+deadline = "2026-10-29"
+
+[[tasks]]
+id = "email"
+title = "Email TA about the project"
+minutes = 15
+priority = "urgent"
+
+[[tasks]]
+id = "advisor"
+title = "Meet academic advisor"
+minutes = 30
+at = "2026-10-27 18:45"
+
+[[tasks]]
+id = "notebook"
+title = "Buy a notebook"
+minutes = 20
+priority = "low"
+
+[[tasks]]
+id = "quiz"
+title = "Prepare for programming quiz"
+minutes = 90
+on = "2026-11-02"
+
+# ---- dailies (Habitica Daily): repeat on a schedule
+[[tasks]]
+id = "review"
+title = "Review today's lectures"
+type = "daily"
+minutes = 30
+repeat = ["sat", "sun", "tue", "wed"]       # class days; the agent picks one stable time
+
+[[tasks]]
+id = "german"
+title = "German vocab"
+type = "daily"
+minutes = 20
+repeat = "daily"
+time = "21:30"                              # you asked for this exact time
+
+# ---- habits (Habitica Habit): no schedule, tracked with + / -
+[[tasks]]
+id = "water"
+title = "Drink water"
+type = "habit"
+direction = "up"
+
+[[tasks]]
+id = "phone"
+title = "Phone while studying"
+type = "habit"
+direction = "down"
+reset = "daily"
