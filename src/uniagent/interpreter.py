@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Mapping, Sequence
 
@@ -54,7 +54,12 @@ absolute dates. Formats: dates "YYYY-MM-DD", date+time "YYYY-MM-DD HH:MM" (24h, 
 - deadline  = "due/by/before ..." ("report by Thursday"). A bare date means end of that day: give
               just the date. Time words: morning 09:00, noon 12:00, afternoon 15:00, evening 19:00,
               tonight 21:00, late 22:00.
-- not_before = "after Sunday", "starting Monday".
+- not_before = ONLY when the student says the work cannot START before a date ("start after Sunday",
+              "from Monday onwards", "not before the 5th"). It is NOT for "tomorrow", "on Saturday" or
+              "remind me on 31 October": all of those are on_date.
+Examples: "remind me tomorrow to prepare for the quiz" -> on_date = tomorrow's date. "do the quiz prep
+on Saturday 31 October" -> on_date. "move the quiz prep to Saturday" -> update_task with on_date.
+"report due Thursday" -> deadline. "meet my advisor Tuesday 3pm" -> at.
 Never invent a date the student did not imply. If no date is given at all, leave dates null - the
 engine will find free time itself.
 
@@ -182,6 +187,7 @@ class ParseContext:
     rules: Rules
     now: datetime
     n_messages: int = 1
+    texts: Mapping[int, str] = field(default_factory=dict)      # message number -> what the student wrote
 
 
 # ------------------------------------------------------------ course names
@@ -485,6 +491,25 @@ def _read_task_fields(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -
     cmd.habit_reset = _clean(raw.get("habit_reset"))
     cmd.notes = (_clean(raw.get("notes")) or "")[:1000] or None
     cmd.clear = frozenset(c for c in (raw.get("clear") or []) if c in CLEARABLE)
+    _fix_not_before(cmd, ctx)
+
+
+_START_WORDS = re.compile(r"\b(after|from|starting|starts?|since|not before|no earlier|earliest|beginning|"
+                          r"begin|later than|following|onwards?)\b", re.I)
+
+
+def _fix_not_before(cmd: Command, ctx: ParseContext) -> None:
+    """Gemini sometimes files "tomorrow" / "on Saturday" under not_before ("can't start before").
+    The scheduler then treats the day as merely the earliest possible one and may pick a far lighter
+    day (e.g. next Monday). If the student's words contain nothing like "after/from/starting", the
+    date was meant as the day itself, so move it to on_date."""
+    nb = cmd.not_before
+    if nb is None or cmd.on_date or cmd.at or cmd.deadline or nb.time() != time(0, 0):
+        return                                                  # a time of day, or another date, was given
+    text = ctx.texts.get(cmd.message)
+    if not text or _START_WORDS.search(text) or nb.date() < ctx.now.date():
+        return
+    cmd.on_date, cmd.not_before = nb.date(), None
 
 
 def _finish_add(cmd: Command, ctx: ParseContext) -> tuple[Command | None, str | None, str | None]:
@@ -568,6 +593,10 @@ def parse_response(data: Mapping[str, Any], ctx: ParseContext) -> Interpretation
     for t in data.get("transcripts") or []:
         if isinstance(t, Mapping) and isinstance(t.get("message"), int) and _clean(t.get("text")):
             result.transcripts[t["message"]] = str(t["text"]).strip()[:2000]
+    texts = dict(ctx.texts)                                     # typed text, or the transcript of a voice note
+    for index, spoken in result.transcripts.items():
+        texts.setdefault(index, spoken)
+    ctx = replace(ctx, texts=texts)
     for q in data.get("questions") or []:
         if _clean(q):
             result.questions.append(str(q).strip()[:300])
@@ -607,7 +636,8 @@ def interpret(client: GeminiClient, messages: Sequence[InboxMessage], tasks: Seq
     if not used:
         return Interpretation(skipped=skipped)
     data, model = client.generate_json(SYSTEM_PROMPT, parts, RESPONSE_SCHEMA)
-    result = parse_response(data, ParseContext(tasks, tt, rules, now, len(used)))
+    result = parse_response(data, ParseContext(tasks, tt, rules, now, len(used),
+                                               texts={i: m.text for i, m in enumerate(used, 1) if m.text}))
     result.skipped, result.model = skipped, model
     result.used = [m.update_id for m in used]
     # message numbers in the answer are positions in `used`; map transcripts back to update ids
