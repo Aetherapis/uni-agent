@@ -121,7 +121,7 @@ class Plan:
 def build_plan(desired: Sequence[HabiticaItem], remote: Iterable[RemoteTask], tz: ZoneInfo, *,
                completed_aliases: Iterable[str] = (), done_keys: Iterable[str] = (),
                max_deletes: int = 15, max_delete_ratio: float = 0.6,
-               allow_mass_delete: bool = False) -> Plan:
+               allow_mass_delete: bool = False, expected_deletes: Iterable[str] = ()) -> Plan:
     plan = Plan()
     ours = {t.alias: t for t in remote if is_managed(t.alias)}
     wanted = {i.key: i for i in desired}
@@ -151,13 +151,15 @@ def build_plan(desired: Sequence[HabiticaItem], remote: Iterable[RemoteTask], tz
             plan.deletes.append(task)
 
     if plan.deletes and not allow_mass_delete:
-        n, m = len(plan.deletes), len(ours)
-        if not desired and m > 0:
+        exempt = set(expected_deletes)                          # cancelled by the student a moment ago: expected
+        risky = [t for t in plan.deletes if t.alias not in exempt]
+        n, m = len(risky), len(ours)
+        if risky and not desired and m >= 3:
             plan.blocked = f"refused to delete all {m} agent-managed tasks because nothing is desired (data problem?)"
         elif n > max_deletes or (m >= 6 and n / m > max_delete_ratio):
             plan.blocked = f"refused to delete {n} of {m} agent-managed tasks in one run (safety stop)"
         if plan.blocked:
-            plan.deletes = []
+            plan.deletes = [t for t in plan.deletes if t.alias in exempt]
     return plan
 
 
@@ -202,7 +204,8 @@ class SyncReport:
 # ------------------------------------------------------------------ executor
 def sync(client: HabiticaClient, desired: Sequence[HabiticaItem], tz: ZoneInfo, *,
          today: date | None = None, done_keys: Iterable[str] = (), budget: Budget | None = None,
-         dry_run: bool = False, max_deletes: int = 15, allow_mass_delete: bool = False) -> SyncReport:
+         dry_run: bool = False, max_deletes: int = 15, allow_mass_delete: bool = False,
+         expected_deletes: Iterable[str] = ()) -> SyncReport:
     """Bring Habitica in line with ``desired``. Raises only for bad credentials."""
     report = SyncReport(dry_run=dry_run)
     today = today or datetime.now(tz).date()
@@ -218,7 +221,8 @@ def sync(client: HabiticaClient, desired: Sequence[HabiticaItem], tz: ZoneInfo, 
         if maybe_done:                                          # one extra read, only when needed
             completed_aliases = {t.alias for t in client.get_tasks("completedTodos") if t.alias}
         plan = build_plan(desired, remote, tz, completed_aliases=completed_aliases, done_keys=done_keys,
-                          max_deletes=max_deletes, allow_mass_delete=allow_mass_delete)
+                          max_deletes=max_deletes, allow_mass_delete=allow_mass_delete,
+                          expected_deletes=expected_deletes)
         report.blocked = plan.blocked
         report.completed_on_habitica = list(plan.completed_keys)
         if plan.blocked:

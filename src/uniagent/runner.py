@@ -133,6 +133,15 @@ class Runtime:
             return None
 
 
+def _merge_fresh(tasks: list[Task], applied: ApplyResult) -> list[Task]:
+    """Notion queries can lag a moment behind writes. For the tasks this very run just created, changed,
+    finished or cancelled, trust the in-memory copy (it holds exactly what was written) over the re-read."""
+    touched = {t.id: t for t in (*applied.added, *applied.updated, *applied.completed, *applied.cancelled)}
+    merged = [touched.pop(t.id, t) for t in tasks]
+    merged.extend(touched.values())                               # created, but not returned by the re-read yet
+    return merged
+
+
 # ---------------------------------------------------------------- telegram io
 def _send(svc: Services, report: RunReport, text: str) -> bool:
     if svc.telegram is None or svc.owner_chat is None or not text.strip():
@@ -319,6 +328,8 @@ def _sync_habitica(svc: Services, rt: Runtime, report: RunReport, tasks: list[Ta
     rules = svc.rules
     items = build_items(tasks, plan.placements, tt, rules, now, plan.daily_times)
     done_keys = {task_key(k) for k in svc.store.load_done_keys()}
+    if batch.applied is not None:                                 # finished a moment ago: the re-read may not list it yet
+        done_keys |= {task_key(t.id) for t in batch.applied.completed if t.type is TaskType.TODO}
     fp = fingerprint(items, done_keys)
     verified = rt.when("habitica_verified_at")
     stale = verified is None or now - verified >= HABITICA_VERIFY_EVERY
@@ -327,7 +338,8 @@ def _sync_habitica(svc: Services, rt: Runtime, report: RunReport, tasks: list[Ta
     else:
         budget = Budget(rules.habitica_budget_min * 60)
         result = sync(svc.habitica, items, rules.tz, today=now.date(), done_keys=done_keys, budget=budget,
-                      max_deletes=rules.habitica_max_deletes, allow_mass_delete=batch.allow_delete)
+                      max_deletes=rules.habitica_max_deletes, allow_mass_delete=batch.allow_delete,
+                      expected_deletes={task_key(t.id) for t in batch.applied.cancelled} if batch.applied else ())
         report.habitica = result
         by_key = {task_key(t.id): t for t in tasks}
         for key in result.completed_on_habitica:                  # ticked off in the Habitica app
@@ -383,6 +395,8 @@ def run_once(svc: Services, *, skip_habitica: bool = False, sync_only: bool = Fa
                 _process_natural(svc, rt, report, natural, tasks, tt, now, batch)
         if tasks is None or tt is None or batch.reload:
             tasks, tt = svc.store.load_tasks(), svc.store.load_timetable()
+            if batch.applied is not None:
+                tasks = _merge_fresh(tasks, batch.applied)
         if batch.replan:
             for t in tasks:
                 if t.type is TaskType.TODO and t.kind is Kind.FLEXIBLE:

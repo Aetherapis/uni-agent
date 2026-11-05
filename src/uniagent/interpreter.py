@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .classify import classify_text
 from .config import ConfigError, Rules, parse_hhmm, parse_weekday
+from .dates import find_clock_times, single_day
 from .gemini import GeminiClient, audio_part, text_part
 from .loaders import parse_date, parse_datetime
 from .models import Kind, Priority, Task, TaskType
@@ -59,7 +60,8 @@ absolute dates. Formats: dates "YYYY-MM-DD", date+time "YYYY-MM-DD HH:MM" (24h, 
               "remind me on 31 October": all of those are on_date.
 Examples: "remind me tomorrow to prepare for the quiz" -> on_date = tomorrow's date. "do the quiz prep
 on Saturday 31 October" -> on_date. "move the quiz prep to Saturday" -> update_task with on_date.
-"report due Thursday" -> deadline. "meet my advisor Tuesday 3pm" -> at.
+"report due Thursday" -> deadline. "meet my advisor Tuesday 3pm" -> at. "plan a physics revision
+on 2 November at 9AM" -> at = that date 09:00. "tomorrow" means the day AFTER the NOW date in <context>.
 Never invent a date the student did not imply. If no date is given at all, leave dates null - the
 engine will find free time itself.
 
@@ -130,7 +132,7 @@ RESPONSE_SCHEMA: dict = {
         "questions": {"type": "ARRAY", "items": {"type": "STRING"}},
         "ack": {"type": "STRING", "nullable": True},
     },
-    "required": ["commands", "questions"],
+    "required": ["commands", "questions", "transcripts"],
 }
 
 
@@ -166,6 +168,7 @@ class Command:
     days: int = 1
     direction: str = "up"
     note: str | None = None                                     # something worth telling the student
+    date_fix: str | None = None                                 # set when the date was corrected from the student's words
 
 
 @dataclass
@@ -188,6 +191,7 @@ class ParseContext:
     now: datetime
     n_messages: int = 1
     texts: Mapping[int, str] = field(default_factory=dict)      # message number -> what the student wrote
+    task_commands: Mapping[int, int] = field(default_factory=dict)   # message number -> how many add/update commands
 
 
 # ------------------------------------------------------------ course names
@@ -472,12 +476,6 @@ def _read_task_fields(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -
     cmd.not_before = _dt(raw.get("not_before"), "not-before")
     if cmd.at is not None and len(str(raw.get("at")).strip()) <= 10:
         raise ValueError("a fixed appointment needs a time of day")
-    if cmd.at is not None and cmd.at < now - timedelta(minutes=5):
-        raise ValueError(f"{cmd.at:%a %d %b %H:%M} is in the past")
-    if cmd.deadline is not None and cmd.deadline < now:
-        raise ValueError(f"the deadline {cmd.deadline:%a %d %b %H:%M} is in the past")
-    if cmd.on_date is not None and cmd.on_date < now.date():
-        raise ValueError(f"{cmd.on_date:%a %d %b} is in the past")
     days = raw.get("repeat_days")
     if days is not None:
         names = [str(x).strip().lower() for x in days]
@@ -491,25 +489,74 @@ def _read_task_fields(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -
     cmd.habit_reset = _clean(raw.get("habit_reset"))
     cmd.notes = (_clean(raw.get("notes")) or "")[:1000] or None
     cmd.clear = frozenset(c for c in (raw.get("clear") or []) if c in CLEARABLE)
-    _fix_not_before(cmd, ctx)
+    _reconcile_dates(cmd, raw, ctx)          # before the past-date checks: a miscounted "tomorrow" can be repaired
+    if cmd.at is not None and cmd.at < now - timedelta(minutes=5):
+        raise ValueError(f"{cmd.at:%a %d %b %H:%M} is in the past")
+    if cmd.deadline is not None and cmd.deadline < now:
+        raise ValueError(f"the deadline {cmd.deadline:%a %d %b %H:%M} is in the past")
+    if cmd.on_date is not None and cmd.on_date < now.date():
+        raise ValueError(f"{cmd.on_date:%a %d %b} is in the past")
 
 
-_START_WORDS = re.compile(r"\b(after|from|starting|starts?|since|not before|no earlier|earliest|beginning|"
-                          r"begin|later than|following|onwards?)\b", re.I)
+def _dates_text(cmd: Command, raw: Mapping[str, Any]) -> str:
+    parts = [f"{name}={value:%Y-%m-%d %H:%M}" if isinstance(value, datetime) else f"{name}={value}"
+             for name, value in (("on_date", cmd.on_date), ("at", cmd.at), ("deadline", cmd.deadline),
+                                 ("not_before", cmd.not_before)) if value is not None]
+    parts += [f"{k}={_clean(raw.get(k))}" for k in ("date", "start", "from_day", "from") if _clean(raw.get(k))]
+    return ", ".join(parts)
 
 
-def _fix_not_before(cmd: Command, ctx: ParseContext) -> None:
-    """Gemini sometimes files "tomorrow" / "on Saturday" under not_before ("can't start before").
-    The scheduler then treats the day as merely the earliest possible one and may pick a far lighter
-    day (e.g. next Monday). If the student's words contain nothing like "after/from/starting", the
-    date was meant as the day itself, so move it to on_date."""
-    nb = cmd.not_before
-    if nb is None or cmd.on_date or cmd.at or cmd.deadline or nb.time() != time(0, 0):
-        return                                                  # a time of day, or another date, was given
-    text = ctx.texts.get(cmd.message)
-    if not text or _START_WORDS.search(text) or nb.date() < ctx.now.date():
+def _reconcile_dates(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -> None:
+    """Cross-check the dates Gemini returned against the day the student actually WROTE or SAID.
+
+    Gemini sometimes files "tomorrow" under not_before, counts "tomorrow" from the wrong day, or
+    forgets the date although its reply claims it scheduled it. Words like "tomorrow", "2 November"
+    and "9AM" can be read by plain code, so when the message names exactly one day (and holds exactly
+    one task), that day wins. "after Sunday" style start limits are left alone."""
+    if cmd.task_type in (TaskType.DAILY, TaskType.HABIT):
         return
-    cmd.on_date, cmd.not_before = nb.date(), None
+    text = ctx.texts.get(cmd.message)
+    if not text or ctx.task_commands.get(cmd.message, 0) != 1:
+        return                                          # no words to check, or several tasks in one message
+    hit = single_day(text, ctx.now.date())
+    if hit is None or hit.role == "not_before":
+        return
+    times = set(find_clock_times(text))
+    clock = next(iter(times)) if len(times) == 1 else None
+    had_date = any(v is not None for v in (cmd.on_date, cmd.deadline, cmd.at, cmd.not_before))
+    if hit.kind == "weekday" and not had_date and clock is None:
+        return                                          # a bare weekday never invents a date by itself
+    model, day, now = _dates_text(cmd, raw), hit.day, ctx.now
+
+    if hit.role == "deadline":                          # "by tomorrow", "before Friday 5pm"
+        wanted = datetime.combine(day, clock or time(23, 59))
+        if cmd.at is not None or cmd.deadline == wanted:
+            return
+        cmd.deadline = wanted
+        shown = f"due {wanted:%a %d %b %H:%M}"
+    else:                                               # "tomorrow", "on 2 November (at 9AM)": the day itself
+        if cmd.at is not None:
+            if cmd.at.date() == day:
+                return
+            fixed = datetime.combine(day, cmd.at.time())
+        elif clock is not None and datetime.combine(day, clock) >= now - timedelta(minutes=5):
+            fixed = datetime.combine(day, clock)
+        else:
+            fixed = None
+        nb, due = cmd.not_before, cmd.deadline                  # drop what contradicts "do it ON that day"
+        if nb is not None and (nb.date() > day or (nb.date() == day and nb.time() == time(0, 0))):
+            cmd.not_before = None
+        if due is not None and due.date() <= day:
+            cmd.deadline = None
+        if fixed is not None:
+            cmd.at, cmd.on_date = fixed, None
+            shown = f"{fixed:%a %d %b %H:%M}"
+        else:
+            if cmd.on_date == day and model == f"on_date={day}":
+                return                                  # the model already had it exactly right
+            cmd.on_date = day
+            shown = f"{day:%a %d %b}"
+    cmd.date_fix = f"date taken from your words: {shown}; the AI had: {model or 'no date'}"
 
 
 def _finish_add(cmd: Command, ctx: ParseContext) -> tuple[Command | None, str | None, str | None]:
@@ -596,7 +643,13 @@ def parse_response(data: Mapping[str, Any], ctx: ParseContext) -> Interpretation
     texts = dict(ctx.texts)                                     # typed text, or the transcript of a voice note
     for index, spoken in result.transcripts.items():
         texts.setdefault(index, spoken)
-    ctx = replace(ctx, texts=texts)
+    counts: dict[int, int] = {}
+    for raw_cmd in data.get("commands") or []:
+        if isinstance(raw_cmd, Mapping) and _clean(raw_cmd.get("op")) in ("add_task", "update_task"):
+            index = raw_cmd.get("message")
+            index = index if isinstance(index, int) and 1 <= index <= max(1, ctx.n_messages) else 1
+            counts[index] = counts.get(index, 0) + 1
+    ctx = replace(ctx, texts=texts, task_commands=counts)
     for q in data.get("questions") or []:
         if _clean(q):
             result.questions.append(str(q).strip()[:300])

@@ -47,6 +47,20 @@ class ApplyResult:
                     or self.classes_cancelled or self.events_added or self.replan_all)
 
 
+def _when(t: Task) -> str:
+    """The dates a task ended up with, for the Inbox 'Result' column (so a wrong date is easy to diagnose)."""
+    bits = []
+    if t.kind is Kind.FIXED and t.fixed_start:
+        bits.append(f"fixed {t.fixed_start:%Y-%m-%d %H:%M}")
+    if t.on_date:
+        bits.append(f"on {t.on_date}")
+    if t.deadline:
+        bits.append(f"due {t.deadline:%Y-%m-%d %H:%M}")
+    if t.not_before:
+        bits.append(f"not before {t.not_before:%Y-%m-%d %H:%M}")
+    return ", ".join(bits) or "no date"
+
+
 def _title_base(title: str) -> str:
     return _PART_SUFFIX.sub("", title).strip()
 
@@ -139,7 +153,8 @@ def _add_task(cmd: Command, tasks: list[Task], store: NotionStore, rules: Rules,
     store.add_tasks(parts, source=source)
     tasks.extend(parts)
     out.added.extend(parts)
-    return f"added {task.title}" + (f" ({len(parts)} sessions)" if len(parts) > 1 else "")
+    return (f"added {task.title} [{_when(task)}]" + (f" ({len(parts)} sessions)" if len(parts) > 1 else "")
+            + (f" ({cmd.date_fix})" if cmd.date_fix else ""))
 
 
 def _update_task(cmd: Command, tasks: list[Task], store: NotionStore, rules: Rules, out: ApplyResult,
@@ -181,7 +196,8 @@ def _update_task(cmd: Command, tasks: list[Task], store: NotionStore, rules: Rul
         store.update_task(task)
         out.updated.append(task)
         names.append(task.title)
-    return f"updated {_title_base(group[0].title)}" if names else None
+    return (f"updated {_title_base(group[0].title)} [{_when(group[0])}]"
+            + (f" ({cmd.date_fix})" if cmd.date_fix else "")) if names else None
 
 
 def _field_changes(task: Task, cmd: Command) -> dict:
