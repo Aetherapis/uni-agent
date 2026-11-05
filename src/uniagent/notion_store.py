@@ -243,9 +243,11 @@ class NotionStore:
             {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": cutoff}}]})
         return [plain(p, "Key") or str(p["id"]) for p in pages]
 
-    def load_recent_tasks(self, status: Status, days: int = 7) -> list[Task]:
+    def load_recent_tasks(self, status: Status, days: int = 7, now: datetime | None = None) -> list[Task]:
         """Tasks set to ``status`` (Done / Cancelled) within the last ``days`` days - for the weekly review."""
-        cutoff = (self._now() - timedelta(days=days)).isoformat()
+        base = now or self._now()
+        base = base.replace(tzinfo=self.tz) if base.tzinfo is None else base.astimezone(self.tz)
+        cutoff = (base - timedelta(days=days)).isoformat()
         pages = self.client.query(self.ws["Tasks"], filter={"and": [
             {"property": "Status", "select": {"equals": STATUS_LABEL[status]}},
             {"timestamp": "last_edited_time", "last_edited_time": {"on_or_after": cutoff}}]})
