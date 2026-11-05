@@ -296,8 +296,8 @@ def _agenda_range(arg: str, today: date) -> tuple[date, int]:
 
 # -------------------------------------------------------------------- digests
 def _weekly_text(svc: Services, tasks: list[Task], plan: ScheduleResult, tt: Timetable, now: datetime) -> str:
-    done = svc.store.load_recent_tasks(Status.DONE, 7)
-    cancelled = svc.store.load_recent_tasks(Status.CANCELLED, 7)
+    done = svc.store.load_recent_tasks(Status.DONE, 7, now=now)
+    cancelled = svc.store.load_recent_tasks(Status.CANCELLED, 7, now=now)
     return weekly_review(now, tasks, done, cancelled, plan, tt, svc.rules)
 
 

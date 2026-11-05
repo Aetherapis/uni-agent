@@ -343,3 +343,13 @@ def test_recent_done_and_cancelled_tasks_can_be_listed_for_the_weekly_review(env
     store.set_status(gone, Status.CANCELLED)
     assert [t.title for t in store.load_recent_tasks(Status.DONE, days=7)] == ["Fresh"]
     assert [t.title for t in store.load_recent_tasks(Status.CANCELLED, days=7)] == ["Gone"]
+
+
+def test_recent_tasks_can_use_explicit_now_instead_of_store_clock(env):
+    fake, store = env
+    old, fresh = T("Old"), T("Fresh")
+    store.add_tasks([old, fresh])
+    store.set_status(old, Status.DONE)
+    fake.tick(days=10)
+    store.set_status(fresh, Status.DONE)
+    assert [t.title for t in store.load_recent_tasks(Status.DONE, days=7, now=fake.now)] == ["Fresh"]
