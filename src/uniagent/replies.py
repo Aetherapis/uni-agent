@@ -70,9 +70,7 @@ def task_warnings(plan: ScheduleResult, ids: set[str]) -> list[str]:
 def compose_reply(interp: Interpretation, applied: ApplyResult, tasks: Sequence[Task], plan: ScheduleResult,
                   tt: Timetable, rules: Rules, now: datetime) -> str:
     by_id = {t.id: t for t in tasks}
-    lines: list[str] = []
-    if interp.ack:
-        lines.append(interp.ack)
+    lines: list[str] = []          # facts only: the model's friendly opening line used to contradict the real plan
 
     touched: set[str] = set()
     for group in _groups(applied.added):
@@ -107,7 +105,7 @@ def compose_reply(interp: Interpretation, applied: ApplyResult, tasks: Sequence[
     lines += [f"Couldn't do: {e}" for e in interp.errors + applied.errors]
     lines += [f"Question: {q}" for q in interp.questions]
 
-    if not lines or (lines == [interp.ack] and not applied.agenda):
+    if not lines:
         lines.append("I didn't find anything to schedule in that.")
     for day, count in applied.agenda:
         lines += ["", format_agenda(day, count, tasks, plan, tt, rules)]

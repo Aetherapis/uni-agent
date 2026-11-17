@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .classify import classify_text
 from .config import ConfigError, Rules, parse_hhmm, parse_weekday
-from .dates import find_clock_times, single_day
+from .dates import find_clock_times, find_slots, single_day
 from .gemini import GeminiClient, audio_part, text_part
 from .loaders import parse_date, parse_datetime
 from .models import Kind, Priority, Task, TaskType
@@ -90,8 +90,9 @@ OTHER COMMANDS:
 
 If a message needs a clarification, add ONE short question to `questions` (in the student's language)
 and do not emit the uncertain command. Chit-chat or unclear messages: no commands. Never invent tasks.
-`ack`: one short friendly sentence (max 12 words) in the student's language that makes NO claim about
-what was scheduled. For voice notes also return `transcripts` (the words spoken, verbatim).
+Field values must contain ONLY the value itself: a date exactly as YYYY-MM-DD, a date and time exactly as
+YYYY-MM-DD HH:MM, never extra words, explanations or comments. For voice notes also return `transcripts`
+(the words spoken, verbatim); for typed messages return an empty list.
 
 STUDENT VOCABULARY: tutorial/tut = small-group class; lecture = big class; lab = practical session;
 slot/period N = the N-th teaching block of the day (see CLASS SLOTS); group/tut/lab numbers
@@ -130,7 +131,6 @@ RESPONSE_SCHEMA: dict = {
             "direction": {"type": "STRING", "enum": ["up", "down"], "nullable": True},
         }, "required": ["op", "message"]}},
         "questions": {"type": "ARRAY", "items": {"type": "STRING"}},
-        "ack": {"type": "STRING", "nullable": True},
     },
     "required": ["commands", "questions", "transcripts"],
 }
@@ -332,14 +332,24 @@ def _clean(value: Any) -> str | None:
     return None if text.lower() in ("", "null", "none", "n/a") else text
 
 
+_ISO_IN_TEXT = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?")
+
+
+def _date_text(text: str) -> str:
+    """The model occasionally glues stray words or characters onto a date ("2026-11-13xyz after_classes").
+    Keep only the date (and time) at the front; anything else is junk."""
+    m = _ISO_IN_TEXT.search(text)
+    return m.group(0) if m else text[:40]
+
+
 def _dt(value: Any, what: str, *, date_only_end: bool = False) -> datetime | None:
     text = _clean(value)
     if text is None:
         return None
     try:
-        return parse_datetime(text, what, date_only_end=date_only_end)
+        return parse_datetime(_date_text(text), what, date_only_end=date_only_end)
     except ConfigError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ValueError(str(exc)[:120]) from exc
 
 
 def _d(value: Any, what: str) -> date | None:
@@ -347,9 +357,9 @@ def _d(value: Any, what: str) -> date | None:
     if text is None:
         return None
     try:
-        return parse_date(text[:10], what)
+        return parse_date(_date_text(text)[:10], what)
     except ConfigError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ValueError(str(exc)[:120]) from exc
 
 
 def _title_base_of(t: Task) -> str:
@@ -439,9 +449,12 @@ def _parse_command(raw: Mapping[str, Any], ctx: ParseContext) -> tuple[Command |
             return _finish_cancel_class(cmd, raw, ctx)
         if op == "add_event":
             start = _dt(raw.get("start"), "event start")
+            end = _dt(raw.get("end"), "event end")
+            if start is None:
+                start, end = _event_from_words(cmd, ctx)
             if start is None or not cmd.title:
                 return None, None, "An event needs a title and a start time"
-            end = _dt(raw.get("end"), "event end") or start + timedelta(hours=1)
+            end = end or start + timedelta(hours=1)
             if end <= start:
                 return None, None, f"The event '{cmd.title}' ends before it starts"
             cmd.start, cmd.end = start, end
@@ -452,7 +465,7 @@ def _parse_command(raw: Mapping[str, Any], ctx: ParseContext) -> tuple[Command |
             return cmd, None, None
         return cmd, None, None                                     # replan_all
     except (ValueError, TypeError) as exc:
-        return None, None, f"Couldn't read part of that request ({exc})"
+        return None, None, f"Couldn't read part of that request ({str(exc)[:100]})"
 
 
 def _read_task_fields(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -> None:
@@ -489,6 +502,17 @@ def _read_task_fields(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) -
     cmd.habit_reset = _clean(raw.get("habit_reset"))
     cmd.notes = (_clean(raw.get("notes")) or "")[:1000] or None
     cmd.clear = frozenset(c for c in (raw.get("clear") or []) if c in CLEARABLE)
+    if cmd.on_date is None and cmd.at is None and cmd.deadline is None and cmd.not_before is None:
+        for key in ("start", "date", "from", "from_day"):       # the date went into a field meant for other commands
+            value = _clean(raw.get(key))
+            if value and re.search(r"\d{4}-\d{2}-\d{2}", value):
+                parsed = _dt(value, key)
+                if parsed is not None:
+                    if re.search(r"\d{1,2}:\d{2}", value):
+                        cmd.at = parsed
+                    else:
+                        cmd.on_date = parsed.date()
+                break
     _reconcile_dates(cmd, raw, ctx)          # before the past-date checks: a miscounted "tomorrow" can be repaired
     if cmd.at is not None and cmd.at < now - timedelta(minutes=5):
         raise ValueError(f"{cmd.at:%a %d %b %H:%M} is in the past")
@@ -523,6 +547,13 @@ def _reconcile_dates(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) ->
         return
     times = set(find_clock_times(text))
     clock = next(iter(times)) if len(times) == 1 else None
+    slot_minutes = None
+    if clock is None:                                    # "fifth slot" -> that slot's start time from the timetable
+        slots = [n for n in find_slots(text) if n in ctx.tt.periods]
+        if len(slots) == 1:
+            begin, finish = ctx.tt.periods[slots[0]]
+            clock = begin
+            slot_minutes = int((datetime.combine(date.min, finish) - datetime.combine(date.min, begin)).total_seconds() // 60)
     had_date = any(v is not None for v in (cmd.on_date, cmd.deadline, cmd.at, cmd.not_before))
     if hit.kind == "weekday" and not had_date and clock is None:
         return                                          # a bare weekday never invents a date by itself
@@ -550,6 +581,8 @@ def _reconcile_dates(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) ->
             cmd.deadline = None
         if fixed is not None:
             cmd.at, cmd.on_date = fixed, None
+            if cmd.minutes is None and slot_minutes:
+                cmd.minutes = slot_minutes
             shown = f"{fixed:%a %d %b %H:%M}"
         else:
             if cmd.on_date == day and model == f"on_date={day}":
@@ -557,6 +590,27 @@ def _reconcile_dates(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext) ->
             cmd.on_date = day
             shown = f"{day:%a %d %b}"
     cmd.date_fix = f"date taken from your words: {shown}; the AI had: {model or 'no date'}"
+
+
+def _event_from_words(cmd: Command, ctx: ParseContext) -> tuple[datetime | None, datetime | None]:
+    """When the model gave an event no start, take the day and the time (or class slot) from what was said."""
+    text = ctx.texts.get(cmd.message)
+    if not text:
+        return None, None
+    hit = single_day(text, ctx.now.date())
+    if hit is None:
+        return None, None
+    times = set(find_clock_times(text))
+    if len(times) == 1:
+        begin = next(iter(times))
+        cmd.date_fix = f"event time taken from your words: {hit.day:%a %d %b} {begin:%H:%M}"
+        return datetime.combine(hit.day, begin), None
+    slots = [n for n in find_slots(text) if n in ctx.tt.periods]
+    if len(slots) == 1:
+        begin, finish = ctx.tt.periods[slots[0]]
+        cmd.date_fix = f"event time taken from your words: {hit.day:%a %d %b} slot {slots[0]}"
+        return datetime.combine(hit.day, begin), datetime.combine(hit.day, finish)
+    return None, None
 
 
 def _finish_add(cmd: Command, ctx: ParseContext) -> tuple[Command | None, str | None, str | None]:
@@ -589,7 +643,7 @@ def _finish_update(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext):
 
 
 def _finish_away(cmd: Command, raw: Mapping[str, Any], ctx: ParseContext):
-    until = _dt(raw.get("until"), "away end")
+    until = _dt(raw.get("until"), "away end", date_only_end=True)
     if until is None:
         return None, "Until when are you away?", None
     start = _dt(raw.get("from"), "away start")

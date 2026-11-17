@@ -30,6 +30,11 @@ _NUMERIC = re.compile(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?\b")
 _AFTER_TOMORROW = re.compile(rf"\bday after tomorrow\b{_NOT_POSSESSIVE}")
 _RELATIVE = re.compile(rf"\b(today|tonight|tomorrow|tmrw|tmr)\b{_NOT_POSSESSIVE}")
 _WEEKDAY = re.compile(rf"\b({_DAY_ALT})\b{_NOT_POSSESSIVE}")
+_ABBR = {"mon": 0, "tue": 1, "tues": 1, "wed": 2, "thu": 3, "thur": 3, "thurs": 3, "fri": 4, "sat": 5, "sun": 6}
+# "next Sun", "on Wed", "by fri": abbreviations only count right after a preposition-like word, so
+# "I sat down" or "the sun" are never mistaken for days.
+_WEEKDAY_ABBR = re.compile(r"\b(?:next|this|on|by|before|until|till|from|after|every)\s+"
+                           r"(mon|tues?|wed|thu|thur|thurs|fri|sat|sun)\b\.?" + _NOT_POSSESSIVE)
 
 _CLOCK_COLON = re.compile(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?(?![\d:])")
 _CLOCK_AMPM = re.compile(r"\b(\d{1,2})\s*(am|pm)\b")
@@ -100,6 +105,13 @@ def find_mentions(text: str, today: date) -> list[Mention]:
         ahead = (target - today.weekday()) % 7 or 7                  # the NEXT such day, never today
         add(m, today + timedelta(days=ahead), "weekday")
 
+    for m in _WEEKDAY_ABBR.finditer(low):
+        start = m.start(1)
+        if any(s <= start < e for s, e, _, _ in found):
+            continue
+        ahead = (_ABBR[m.group(1)] - today.weekday()) % 7 or 7
+        add(m, today + timedelta(days=ahead), "weekday")
+
     found.sort(key=lambda item: item[0])
     return [Mention(day, kind, _role(low, start), start) for start, _, day, kind in found]
 
@@ -136,3 +148,17 @@ def find_clock_times(text: str) -> list[time]:
         if t:
             found.append((m.start(), t))
     return [t for _, t in sorted(found)]
+
+
+_ORDINALS = {"first": 1, "1st": 1, "second": 2, "2nd": 2, "third": 3, "3rd": 3, "fourth": 4, "4th": 4,
+             "fifth": 5, "5th": 5, "sixth": 6, "6th": 6, "seventh": 7, "7th": 7}
+_SLOT_ORDINAL = re.compile(r"\b(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th)\s+(?:slot|period)\b")
+_SLOT_NUMBER = re.compile(r"\b(?:slot|period)\s*(?:number\s*|no\.?\s*|#\s*)?(\d)\b")
+
+
+def find_slots(text: str) -> list[int]:
+    """Teaching slots named in the text ("fifth slot", "5th period", "slot 5") as slot numbers."""
+    low = text.lower()
+    found = [_ORDINALS[m.group(1)] for m in _SLOT_ORDINAL.finditer(low)]
+    found += [int(m.group(1)) for m in _SLOT_NUMBER.finditer(low)]
+    return list(dict.fromkeys(found))
