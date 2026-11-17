@@ -70,7 +70,7 @@ def task_warnings(plan: ScheduleResult, ids: set[str]) -> list[str]:
 def compose_reply(interp: Interpretation, applied: ApplyResult, tasks: Sequence[Task], plan: ScheduleResult,
                   tt: Timetable, rules: Rules, now: datetime) -> str:
     by_id = {t.id: t for t in tasks}
-    lines: list[str] = []          # facts only: the model's friendly opening line used to contradict the real plan
+    lines: list[str] = [interp.ack] if interp.ack else []
 
     touched: set[str] = set()
     for group in _groups(applied.added):
